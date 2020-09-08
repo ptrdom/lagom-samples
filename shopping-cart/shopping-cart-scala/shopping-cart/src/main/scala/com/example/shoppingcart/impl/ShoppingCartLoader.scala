@@ -1,16 +1,21 @@
 package com.example.shoppingcart.impl
 
+import akka.cluster.sharding.typed.scaladsl.Entity
 import com.example.shoppingcart.api.ShoppingCartService
 import com.lightbend.lagom.scaladsl.akka.discovery.AkkaDiscoveryComponents
+import com.lightbend.lagom.scaladsl.api.LagomConfigComponent
 import com.lightbend.lagom.scaladsl.broker.kafka.LagomKafkaComponents
+import com.lightbend.lagom.scaladsl.client.LagomServiceClientComponents
 import com.lightbend.lagom.scaladsl.devmode.LagomDevModeComponents
-import com.lightbend.lagom.scaladsl.persistence.slick.SlickPersistenceComponents
-import com.lightbend.lagom.scaladsl.server._
-import com.softwaremill.macwire._
-import play.api.db.HikariCPComponents
-import play.api.libs.ws.ahc.AhcWSComponents
-import akka.cluster.sharding.typed.scaladsl.Entity
+import com.lightbend.lagom.scaladsl.persistence.cassandra.CassandraPersistenceComponents
 import com.lightbend.lagom.scaladsl.playjson.JsonSerializerRegistry
+import com.lightbend.lagom.scaladsl.server._
+import com.sksamuel.elastic4s.ElasticClient
+import com.sksamuel.elastic4s.ElasticProperties
+import com.sksamuel.elastic4s.ElasticDsl._
+import com.sksamuel.elastic4s.http.JavaClient
+import com.softwaremill.macwire._
+import play.api.libs.ws.ahc.AhcWSComponents
 
 import scala.concurrent.ExecutionContext
 
@@ -25,11 +30,7 @@ class ShoppingCartLoader extends LagomApplicationLoader {
   override def describeService = Some(readDescriptor[ShoppingCartService])
 }
 
-trait ShoppingCartComponents
-    extends LagomServerComponents
-    with SlickPersistenceComponents
-    with HikariCPComponents
-    with AhcWSComponents {
+trait ShoppingCartComponents extends LagomServerComponents with CassandraPersistenceComponents with AhcWSComponents {
 
   implicit def executionContext: ExecutionContext
 
@@ -52,11 +53,13 @@ trait ShoppingCartComponents
       ShoppingCart(entityContext)
     }
   )
+
+  lazy val client: ElasticClient = ElasticClient(
+    JavaClient(ElasticProperties(s"http://localhost:${configuration.get[String]("elasticsearch.port")}"))
+  )
 }
 
 abstract class ShoppingCartApplication(context: LagomApplicationContext)
-  extends LagomApplication(context)
-  with ShoppingCartComponents
-  with LagomKafkaComponents {
-
-}
+    extends LagomApplication(context)
+    with ShoppingCartComponents
+    with LagomKafkaComponents {}
