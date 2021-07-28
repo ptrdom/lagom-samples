@@ -35,26 +35,30 @@ class ShoppingCartReportRepository(database: Database) {
   def findById(id: String): Future[Option[ShoppingCartReport]] =
     database.run(findByIdQuery(id))
 
-  def createReport(cartId: String): DBIO[Done] = {
-    findByIdQuery(cartId)
-      .flatMap {
-        case None => reportTable += ShoppingCartReport(cartId, Instant.now(), None)
-        case _    => DBIO.successful(Done)
-      }
-      .map(_ => Done)
-      .transactionally
+  def createReport(cartId: String): Future[Done] = {
+    database.run(
+      findByIdQuery(cartId)
+        .flatMap {
+          case None => reportTable += ShoppingCartReport(cartId, Instant.now(), None)
+          case _    => DBIO.successful(Done)
+        }
+        .map(_ => Done)
+        .transactionally
+    )
   }
 
-  def addCheckoutTime(cartId: String, checkoutDate: Instant): DBIO[Done] = {
-    findByIdQuery(cartId)
-      .flatMap {
-        case Some(cart) => reportTable.insertOrUpdate(cart.copy(checkoutDate = Some(checkoutDate)))
-        // if that happens we have a corrupted system
-        // cart checkout can only happens for a existing cart
-        case None => throw new RuntimeException(s"Didn't find cart for checkout. CartID: $cartId")
-      }
-      .map(_ => Done)
-      .transactionally
+  def addCheckoutTime(cartId: String, checkoutDate: Instant): Future[Done] = {
+    database.run(
+      findByIdQuery(cartId)
+        .flatMap {
+          case Some(cart) => reportTable.insertOrUpdate(cart.copy(checkoutDate = Some(checkoutDate)))
+          // if that happens we have a corrupted system
+          // cart checkout can only happens for a existing cart
+          case None => throw new RuntimeException(s"Didn't find cart for checkout. CartID: $cartId")
+        }
+        .map(_ => Done)
+        .transactionally
+    )
   }
 
   private def findByIdQuery(cartId: String): DBIO[Option[ShoppingCartReport]] =
