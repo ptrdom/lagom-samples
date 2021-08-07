@@ -1,34 +1,32 @@
 package com.example.shoppingcart.impl
 
+import java.time.Instant
+
 import akka.NotUsed
-import com.example.shoppingcart.api.ShoppingCartView
-import com.example.shoppingcart.api.ShoppingCartItem
+import akka.cluster.sharding.typed.scaladsl.ClusterSharding
+import akka.cluster.sharding.typed.scaladsl.EntityRef
+import akka.util.Timeout
 import com.example.shoppingcart.api.Quantity
+import com.example.shoppingcart.api.ShoppingCartItem
 import com.example.shoppingcart.api.ShoppingCartReport
 import com.example.shoppingcart.api.ShoppingCartService
-
+import com.example.shoppingcart.api.ShoppingCartView
 import com.example.shoppingcart.impl.ShoppingCart._
-
+import com.example.utility.TopicOps.AkkaProjectionTopic
 import com.lightbend.lagom.scaladsl.api.ServiceCall
 import com.lightbend.lagom.scaladsl.api.broker.Topic
 import com.lightbend.lagom.scaladsl.api.transport.BadRequest
 import com.lightbend.lagom.scaladsl.api.transport.NotFound
-import com.lightbend.lagom.scaladsl.broker.TopicProducer
-import com.lightbend.lagom.scaladsl.persistence.EventStreamElement
-import com.lightbend.lagom.scaladsl.persistence.PersistentEntityRegistry
 
 import scala.concurrent.ExecutionContext
-import akka.cluster.sharding.typed.scaladsl.ClusterSharding
+import scala.concurrent.Future
 import scala.concurrent.duration._
-import akka.util.Timeout
-import akka.cluster.sharding.typed.scaladsl.EntityRef
 
 /**
  * Implementation of the `ShoppingCartService`.
  */
 class ShoppingCartServiceImpl(
     clusterSharding: ClusterSharding,
-    persistentEntityRegistry: PersistentEntityRegistry,
     reportRepository: ShoppingCartReportRepository
 )(implicit ec: ExecutionContext)
     extends ShoppingCartService {
@@ -74,7 +72,7 @@ class ShoppingCartServiceImpl(
 
   override def checkout(id: String): ServiceCall[NotUsed, ShoppingCartView] = ServiceCall { _ =>
     entityRef(id)
-      .ask(replyTo => Checkout(replyTo))
+      .ask(replyTo => Checkout(Instant.now(), replyTo))
       .map { confirmation =>
         confirmationToResult(id, confirmation)
       }
@@ -86,17 +84,20 @@ class ShoppingCartServiceImpl(
       case Rejected(reason)      => throw BadRequest(reason)
     }
 
-  override def shoppingCartTopic: Topic[ShoppingCartView] = TopicProducer.taggedStreamWithOffset(Event.Tag) {
-    (tag, fromOffset) =>
-      persistentEntityRegistry
-        .eventStream(tag, fromOffset)
-        .filter(_.event.isInstanceOf[CartCheckedOut])
-        .mapAsync(4) { case EventStreamElement(id, _, offset) =>
+  override def shoppingCartTopic: Topic[ShoppingCartView] =
+    AkkaProjectionTopic.create[ShoppingCartView, ShoppingCart.Event](
+      ShoppingCart.tags
+    ) { envelope =>
+      val id = ShoppingCart.entityId(envelope.persistenceId)
+      envelope.event match {
+        case CartCheckedOut(_) =>
           entityRef(id)
             .ask(reply => Get(reply))
-            .map(cart => convertShoppingCart(id, cart) -> offset)
-        }
-  }
+            .map(cart => Right(convertShoppingCart(id, cart)))
+        case _ =>
+          Future.successful(Left(NotUsed))
+      }
+    }
 
   private def convertShoppingCart(id: String, cartSummary: Summary) = {
     ShoppingCartView(

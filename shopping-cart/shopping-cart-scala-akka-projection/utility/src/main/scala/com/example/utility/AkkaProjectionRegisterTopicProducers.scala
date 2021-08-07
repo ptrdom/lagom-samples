@@ -34,7 +34,7 @@ class AkkaProjectionRegisterTopicProducers[P <: JdbcProfile: ClassTag](
     lagomServer: LagomServer,
     info: ServiceInfo,
     serviceLocator: ServiceLocator,
-    databaseConfig: DatabaseConfig[P], //TODO move to trait to support different databases
+    akkaProjectionProvider: AkkaProjectionProvider,
     implicit val actorSystem: ActorSystem,
     implicit val executionContext: ExecutionContext
 ) {
@@ -81,6 +81,7 @@ class AkkaProjectionRegisterTopicProducers[P <: JdbcProfile: ClassTag](
           }
       }
 
+      //TODO make async
       Await.result(brokerList, 10.seconds)
     }
 
@@ -116,11 +117,10 @@ class AkkaProjectionRegisterTopicProducers[P <: JdbcProfile: ClassTag](
                     val tag            = akkaProjectionTopic.tags(index)
                     val sourceProvider = akkaProjectionTopic.sourceProvider(index)(actorSystem.toTyped)
                     implicit val as    = actorSystem.toTyped
-                    SlickProjection
-                      .atLeastOnceAsync(
+                    akkaProjectionProvider
+                      .project(
                         projectionId = ProjectionId(projectionId, tag),
                         sourceProvider,
-                        databaseConfig,
                         handler =
                           () => akkaProjectionTopic.projectionHandler(topicId.name, partitionKeyStrategy, sendProducer)
                       )
