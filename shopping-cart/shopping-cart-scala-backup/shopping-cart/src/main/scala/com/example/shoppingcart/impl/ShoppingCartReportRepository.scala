@@ -4,9 +4,7 @@ import java.time.Instant
 
 import akka.Done
 import com.example.shoppingcart.api.ShoppingCartReport
-import slick.basic.DatabaseConfig
 import slick.dbio.DBIO
-import slick.jdbc.PostgresProfile
 import slick.jdbc.PostgresProfile.api._
 
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -18,7 +16,7 @@ import scala.concurrent.Future
  * It saves data in a ready for consumption format for that specific API model.
  * If the API changes, we must regenerated the stored models.
  */
-class ShoppingCartReportRepository(databaseConfig: DatabaseConfig[PostgresProfile]) {
+class ShoppingCartReportRepository(database: Database) {
 
   class ShoppingCartReportTable(tag: Tag) extends Table[ShoppingCartReport](tag, "shopping_cart_report") {
     def cartId = column[String]("cart_id", O.PrimaryKey)
@@ -35,32 +33,28 @@ class ShoppingCartReportRepository(databaseConfig: DatabaseConfig[PostgresProfil
   def createTable() = reportTable.schema.createIfNotExists
 
   def findById(id: String): Future[Option[ShoppingCartReport]] =
-    databaseConfig.db.run(findByIdQuery(id))
+    database.run(findByIdQuery(id))
 
-  def createReport(cartId: String): Future[Done] = {
-    databaseConfig.db.run(
-      findByIdQuery(cartId)
-        .flatMap {
-          case None => reportTable += ShoppingCartReport(cartId, Instant.now(), None)
-          case _    => DBIO.successful(Done)
-        }
-        .map(_ => Done)
-        .transactionally
-    )
+  def createReport(cartId: String): DBIO[Done] = {
+    findByIdQuery(cartId)
+      .flatMap {
+        case None => reportTable += ShoppingCartReport(cartId, Instant.now(), None)
+        case _    => DBIO.successful(Done)
+      }
+      .map(_ => Done)
+      .transactionally
   }
 
-  def addCheckoutTime(cartId: String, checkoutDate: Instant): Future[Done] = {
-    databaseConfig.db.run(
-      findByIdQuery(cartId)
-        .flatMap {
-          case Some(cart) => reportTable.insertOrUpdate(cart.copy(checkoutDate = Some(checkoutDate)))
-          // if that happens we have a corrupted system
-          // cart checkout can only happens for a existing cart
-          case None => throw new RuntimeException(s"Didn't find cart for checkout. CartID: $cartId")
-        }
-        .map(_ => Done)
-        .transactionally
-    )
+  def addCheckoutTime(cartId: String, checkoutDate: Instant): DBIO[Done] = {
+    findByIdQuery(cartId)
+      .flatMap {
+        case Some(cart) => reportTable.insertOrUpdate(cart.copy(checkoutDate = Some(checkoutDate)))
+        // if that happens we have a corrupted system
+        // cart checkout can only happens for a existing cart
+        case None => throw new RuntimeException(s"Didn't find cart for checkout. CartID: $cartId")
+      }
+      .map(_ => Done)
+      .transactionally
   }
 
   private def findByIdQuery(cartId: String): DBIO[Option[ShoppingCartReport]] =

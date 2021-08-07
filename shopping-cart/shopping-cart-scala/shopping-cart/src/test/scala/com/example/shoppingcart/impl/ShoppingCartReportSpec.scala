@@ -3,46 +3,63 @@ package com.example.shoppingcart.impl
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.TimeUnit.SECONDS
-import java.util.concurrent.atomic.AtomicInteger
 
-import akka.Done
-import akka.persistence.query.Sequence
+import akka.actor.typed.scaladsl.adapter.ClassicActorSystemOps
+import akka.cluster.sharding.typed.scaladsl.EntityRef
+import akka.persistence.jdbc.testkit.scaladsl.SchemaUtils
+import akka.projection.slick.SlickProjection
+import akka.util.Timeout
 import com.lightbend.lagom.scaladsl.api.ServiceLocator
 import com.lightbend.lagom.scaladsl.api.ServiceLocator.NoServiceLocator
 import com.lightbend.lagom.scaladsl.server.LagomApplication
-import com.lightbend.lagom.scaladsl.testkit.ReadSideTestDriver
 import com.lightbend.lagom.scaladsl.testkit.ServiceTest
 import com.lightbend.lagom.scaladsl.testkit.TestTopicComponents
 import org.scalatest._
+import org.scalatest.concurrent.Eventually
+import org.scalatest.concurrent.IntegrationPatience
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.time.SpanSugar.convertIntToGrainOfTime
 import org.scalatest.wordspec.AnyWordSpec
 
+import scala.concurrent.Await
 import scala.concurrent.ExecutionContext
-import scala.concurrent.Future
 
 class ShoppingCartReportSpec
     extends AnyWordSpec
     with BeforeAndAfterAll
     with Matchers
     with ScalaFutures
-    with OptionValues {
+    with OptionValues
+    with IntegrationPatience
+    with Eventually {
 
   import ShoppingCart._
 
-  private val server = ServiceTest.startServer(ServiceTest.defaultSetup.withJdbc(true)) { ctx =>
-    new LagomApplication(ctx) with ShoppingCartComponents with TestTopicComponents {
-      override def serviceLocator: ServiceLocator    = NoServiceLocator
-      override lazy val readSide: ReadSideTestDriver = new ReadSideTestDriver()(materializer, executionContext)
+  private val server = {
+    ServiceTest.startServer(ServiceTest.defaultSetup.withJdbc()) { ctx =>
+      new LagomApplication(ctx) with ShoppingCartComponents with TestTopicComponents {
+        override def serviceLocator: ServiceLocator = NoServiceLocator
+
+        {
+          //TODO move to trait
+          implicit val as = actorSystem.toTyped
+          Await.result(SchemaUtils.createIfNotExists(), 10.seconds)
+          Await.result(SlickProjection.createTablesIfNotExists(databaseConfig), 10.seconds)
+          Await.result(databaseConfig.db.run(reportRepository.createTable()), 10.seconds)
+        }
+
+      }
     }
   }
 
   override def afterAll(): Unit = server.stop()
 
-  private val testDriver                        = server.application.readSide
+  private val clusterSharding                   = server.application.clusterSharding
   private val reportRepository                  = server.application.reportRepository
-  private val offset                            = new AtomicInteger()
   private implicit val exeCxt: ExecutionContext = server.actorSystem.dispatcher
+
+  implicit val timeout = Timeout(5.seconds)
 
   "The shopping cart report processor" should {
 
@@ -53,17 +70,15 @@ class ShoppingCartReportSpec
         reportRepository.findById(cartId).futureValue shouldBe None
       }
 
-      val updatedReport =
-        for {
-          _      <- feedEvent(cartId, ItemAdded("test1", 1))
-          report <- reportRepository.findById(cartId)
-        } yield report
+      entityRef(cartId).ask(AddItem("test1", 1, _)).futureValue
 
       withClue("Cart report is created on first event") {
-        whenReady(updatedReport) { result =>
-          val report = result.value
-          report.creationDate should not be null
-          report.checkoutDate shouldBe None
+        eventually {
+          whenReady(reportRepository.findById(cartId)) { result =>
+            val report = result.value
+            report.creationDate should not be null
+            report.checkoutDate shouldBe None
+          }
         }
       }
     }
@@ -77,32 +92,29 @@ class ShoppingCartReportSpec
 
       // Create a report to check against it later
       var reportCreatedDate: Instant = Instant.now()
-      val createdReport = for {
-        _      <- feedEvent(cartId, ItemAdded("test2", 1))
-        report <- reportRepository.findById(cartId)
-      } yield report
+      entityRef(cartId).ask(AddItem("test2", 1, _)).futureValue
 
       withClue("Cart report created on first event") {
-        whenReady(createdReport) { r =>
-          reportCreatedDate = r.value.creationDate
+        eventually {
+          whenReady(reportRepository.findById(cartId)) { r =>
+            reportCreatedDate = r.value.creationDate
+          }
         }
       }
 
       // To ensure that events have a different instant
       SECONDS.sleep(2);
 
-      val updatedReport =
-        for {
-          _      <- feedEvent(cartId, ItemAdded("test2", 2))
-          _      <- feedEvent(cartId, ItemAdded("test2", 3))
-          report <- reportRepository.findById(cartId)
-        } yield report
+      entityRef(cartId).ask(AddItem("test2", 2, _)).futureValue
+      entityRef(cartId).ask(AddItem("test2", 3, _)).futureValue
 
       withClue("Cart report's creationDate should not change") {
-        whenReady(updatedReport) { result =>
-          val report = result.value
-          report.creationDate shouldBe reportCreatedDate
-          report.checkoutDate shouldBe None
+        eventually {
+          whenReady(reportRepository.findById(cartId)) { result =>
+            val report = result.value
+            report.creationDate shouldBe reportCreatedDate
+            report.checkoutDate shouldBe None
+          }
         }
       }
     }
@@ -116,14 +128,13 @@ class ShoppingCartReportSpec
 
       // Create a report to check against it later
       var reportCreatedDate: Instant = Instant.now()
-      val createdReport = for {
-        _      <- feedEvent(cartId, ItemAdded("test2", 1))
-        report <- reportRepository.findById(cartId)
-      } yield report
+      entityRef(cartId).ask(AddItem("test2", 1, _)).futureValue
 
       withClue("Cart report created on first event") {
-        whenReady(createdReport) { r =>
-          reportCreatedDate = r.value.creationDate
+        eventually {
+          whenReady(reportRepository.findById(cartId)) { r =>
+            reportCreatedDate = r.value.creationDate
+          }
         }
       }
 
@@ -132,25 +143,23 @@ class ShoppingCartReportSpec
 
       val checkedOutTime = reportCreatedDate.plusSeconds(30)
 
-      val updatedReport =
-        for {
-          _      <- feedEvent(cartId, ItemAdded("test3", 1))
-          _      <- feedEvent(cartId, CartCheckedOut(checkedOutTime))
-          report <- reportRepository.findById(cartId)
-        } yield report
+      entityRef(cartId).ask(AddItem("test3", 1, _)).futureValue
+      entityRef(cartId).ask(Checkout(checkedOutTime, _)).futureValue
 
       withClue("Cart report is marked as checked-out") {
-        whenReady(updatedReport) { result =>
-          val report = result.value
-          report.creationDate shouldBe reportCreatedDate
-          report.checkoutDate shouldBe Some(checkedOutTime)
+        eventually {
+          whenReady(reportRepository.findById(cartId)) { result =>
+            val report = result.value
+            report.creationDate shouldBe reportCreatedDate
+            report.checkoutDate shouldBe Some(checkedOutTime)
+          }
         }
       }
     }
 
   }
 
-  private def feedEvent(cartId: String, event: ShoppingCart.Event): Future[Done] = {
-    testDriver.feed(cartId, event, Sequence(offset.getAndIncrement))
+  private def entityRef(id: String): EntityRef[Command] = {
+    clusterSharding.entityRefFor(ShoppingCart.typeKey, id)
   }
 }

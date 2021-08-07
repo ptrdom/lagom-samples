@@ -3,28 +3,39 @@ package com.example.shoppingcart.impl
 import java.time.Instant
 
 import akka.actor.typed.ActorRef
-import akka.actor.typed.ActorSystem
 import akka.actor.typed.Behavior
 import akka.cluster.sharding.typed.scaladsl._
 import akka.persistence.typed.PersistenceId
+import akka.persistence.typed.scaladsl.RetentionCriteria
 import akka.persistence.typed.scaladsl.Effect
 import akka.persistence.typed.scaladsl.Effect.reply
 import akka.persistence.typed.scaladsl.EventSourcedBehavior
 import akka.persistence.typed.scaladsl.ReplyEffect
-import akka.persistence.typed.scaladsl.RetentionCriteria
-import com.example.utility.ActorRefOps
+import com.lightbend.lagom.scaladsl.persistence.AggregateEvent
+import com.lightbend.lagom.scaladsl.persistence.AggregateEventShards
+import com.lightbend.lagom.scaladsl.persistence.AggregateEventTag
+import com.lightbend.lagom.scaladsl.persistence.AggregateEventTagger
+import com.lightbend.lagom.scaladsl.persistence.AkkaTaggerAdapter
 import com.lightbend.lagom.scaladsl.playjson.JsonSerializer
 import com.lightbend.lagom.scaladsl.playjson.JsonSerializerRegistry
 import play.api.libs.json.Format
 import play.api.libs.json._
 
 import scala.collection.immutable.Seq
-import scala.reflect.ClassTag
 
 object ShoppingCart {
 
   // SHOPPING CART COMMANDS
-  sealed trait Command
+
+  // This is a marker trait for shopping cart commands.
+  // We will serialize them using Akka's Jackson support that is able to deal with the replyTo field.
+  // (see application.conf).
+  // Keep in mind that when configuring it on application.conf you need to use the FQCN which is:
+  // com.example.shoppingcart.impl.ShoppingCart$CommandSerializable
+  // Note the "$".
+  trait CommandSerializable
+
+  sealed trait Command extends CommandSerializable
 
   final case class AddItem(itemId: String, quantity: Int, replyTo: ActorRef[Confirmation]) extends Command
 
@@ -32,7 +43,7 @@ object ShoppingCart {
 
   final case class AdjustItemQuantity(itemId: String, quantity: Int, replyTo: ActorRef[Confirmation]) extends Command
 
-  final case class Checkout(eventTime: Instant, replyTo: ActorRef[Confirmation]) extends Command
+  final case class Checkout(replyTo: ActorRef[Confirmation]) extends Command
 
   final case class Get(replyTo: ActorRef[Summary]) extends Command
 
@@ -65,7 +76,13 @@ object ShoppingCart {
   }
 
   // SHOPPING CART EVENTS
-  sealed trait Event
+  sealed trait Event extends AggregateEvent[Event] {
+    override def aggregateTag: AggregateEventTagger[Event] = Event.Tag
+  }
+
+  object Event {
+    val Tag: AggregateEventShards[Event] = AggregateEventTag.sharded[Event](numShards = 10)
+  }
 
   final case class ItemAdded(itemId: String, quantity: Int) extends Event
 
@@ -86,11 +103,6 @@ object ShoppingCart {
 
   val typeKey: EntityTypeKey[Command] = EntityTypeKey[Command]("ShoppingCart")
 
-  val tags: Seq[String] = {
-    val eventType = implicitly[ClassTag[Event]].runtimeClass.asInstanceOf[Class[Event]]
-    Vector.tabulate(10)(i => s"${eventType.getName}$i")
-  }
-
   // We can then access the entity behavior in our test tests, without the need to tag
   // or retain events.
   def apply(persistenceId: PersistenceId): EventSourcedBehavior[Command, Event, ShoppingCart] = {
@@ -105,10 +117,7 @@ object ShoppingCart {
 
   def apply(entityContext: EntityContext[Command]): Behavior[Command] =
     apply(PersistenceId(entityContext.entityTypeKey.name, entityContext.entityId))
-      .withTagger { _ =>
-        val i = math.abs(entityContext.entityId.hashCode % tags.size)
-        Set(tags(i))
-      }
+      .withTagger(AkkaTaggerAdapter.fromLagom(entityContext, Event.Tag))
       .withRetention(RetentionCriteria.snapshotEvery(numberOfEvents = 100, keepNSnapshots = 2))
 
   /**
@@ -119,10 +128,6 @@ object ShoppingCart {
    * serialized and deserialized when storing to and from the database.
    */
   implicit val shoppingCartFormat: Format[ShoppingCart] = Json.format
-
-  def entityId(persistenceId: String) = {
-    persistenceId.split(s"\\|").last
-  }
 }
 
 final case class ShoppingCart(items: Map[String, Int], checkedOutTime: Option[Instant] = None) {
@@ -139,7 +144,7 @@ final case class ShoppingCart(items: Map[String, Int], checkedOutTime: Option[In
         case AddItem(itemId, quantity, replyTo)            => onAddItem(itemId, quantity, replyTo)
         case RemoveItem(itemId, replyTo)                   => onRemoveItem(itemId, replyTo)
         case AdjustItemQuantity(itemId, quantity, replyTo) => onAdjustItemQuantity(itemId, quantity, replyTo)
-        case Checkout(eventTime, replyTo)                  => onCheckout(eventTime, replyTo)
+        case Checkout(replyTo)                             => onCheckout(replyTo)
         case Get(replyTo)                                  => onGet(replyTo)
       }
     } else {
@@ -148,16 +153,16 @@ final case class ShoppingCart(items: Map[String, Int], checkedOutTime: Option[In
         case AddItem(_, _, replyTo)            => reply(replyTo)(Rejected("Cannot add an item to a checked-out cart"))
         case RemoveItem(_, replyTo)            => reply(replyTo)(Rejected("Cannot remove an item from a checked-out cart"))
         case AdjustItemQuantity(_, _, replyTo) => reply(replyTo)(Rejected("Cannot adjust item on a checked-out cart"))
-        case Checkout(_, replyTo)              => reply(replyTo)(Rejected("Cannot checkout a checked-out cart"))
+        case Checkout(replyTo)                 => reply(replyTo)(Rejected("Cannot checkout a checked-out cart"))
       }
     }
 
-  private def onCheckout(eventTime: Instant, replyTo: ActorRef[Confirmation]): ReplyEffect[Event, ShoppingCart] = {
+  private def onCheckout(replyTo: ActorRef[Confirmation]): ReplyEffect[Event, ShoppingCart] = {
     if (items.isEmpty)
       Effect.reply(replyTo)(Rejected("Cannot checkout an empty shopping cart"))
     else
       Effect
-        .persist(CartCheckedOut(eventTime))
+        .persist(CartCheckedOut(Instant.now()))
         .thenReply(replyTo)(updatedCart => Accepted(toSummary(updatedCart)))
   }
 
@@ -236,32 +241,11 @@ final case class ShoppingCart(items: Map[String, Int], checkedOutTime: Option[In
  * The serializers are registered here, and then provided to Lagom in the
  * application loader.
  */
-class ShoppingCartSerializerRegistry(actorSystem: ActorSystem[_]) extends JsonSerializerRegistry {
+object ShoppingCartSerializerRegistry extends JsonSerializerRegistry {
 
   import ShoppingCart._
 
   override def serializers: Seq[JsonSerializer[_]] = Seq(
-    // commands
-    JsonSerializer[AddItem] {
-      implicit val actorRefFormat = ActorRefOps.format[Confirmation](actorSystem)
-      Json.format[AddItem]
-    },
-    JsonSerializer[RemoveItem] {
-      implicit val actorRefFormat = ActorRefOps.format[Confirmation](actorSystem)
-      Json.format[RemoveItem]
-    },
-    JsonSerializer[AdjustItemQuantity] {
-      implicit val actorRefFormat = ActorRefOps.format[Confirmation](actorSystem)
-      Json.format[AdjustItemQuantity]
-    },
-    JsonSerializer[Checkout] {
-      implicit val actorRefFormat = ActorRefOps.format[Confirmation](actorSystem)
-      Json.format[Checkout]
-    },
-    JsonSerializer[Get] {
-      implicit val actorRefFormat = ActorRefOps.format[Summary](actorSystem)
-      Json.format[Get]
-    },
     // state and events can use play-json, but commands should use jackson because of ActorRef[T] (see application.conf)
     JsonSerializer[ShoppingCart],
     JsonSerializer[ItemAdded],

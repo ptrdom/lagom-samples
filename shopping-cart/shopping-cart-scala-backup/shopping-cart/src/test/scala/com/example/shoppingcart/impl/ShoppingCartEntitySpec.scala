@@ -1,6 +1,5 @@
 package com.example.shoppingcart.impl
 
-import java.time.Instant
 import java.util.UUID
 
 import akka.actor.testkit.typed.scaladsl.LogCapturing
@@ -9,13 +8,13 @@ import akka.persistence.typed.PersistenceId
 import org.scalatest.wordspec.AnyWordSpecLike
 
 class ShoppingCartEntitySpec
-    extends ScalaTestWithActorTestKit(s"""
-                                         |akka.persistence.journal.plugin = "akka.persistence.journal.inmem"
-                                         |akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
-                                         |akka.persistence.snapshot-store.local.dir = "target/snapshot-${UUID
-      .randomUUID()
-      .toString}"
-                                         |""".stripMargin)
+  extends ScalaTestWithActorTestKit(s"""
+                                       |akka.persistence.journal.plugin = "akka.persistence.journal.inmem"
+                                       |akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
+                                       |akka.persistence.snapshot-store.local.dir = "target/snapshot-${UUID
+    .randomUUID()
+    .toString}"
+                                       |""".stripMargin)
     with AnyWordSpecLike
     with LogCapturing {
 
@@ -73,8 +72,7 @@ class ShoppingCartEntitySpec
       probe.expectMessageType[ShoppingCart.Accepted]
 
       // Checkout shopping cart
-      val checkedOutTime = Instant.now()
-      shoppingCart ! ShoppingCart.Checkout(checkedOutTime, probe.ref)
+      shoppingCart ! ShoppingCart.Checkout(probe.ref)
       probe.receiveMessage() match {
         case ShoppingCart.Accepted(summary) => summary.checkedOut shouldBe true
         case ShoppingCart.Rejected(reason)  => fail(s"Message was rejected with reason: $reason")
@@ -156,7 +154,7 @@ class ShoppingCartEntitySpec
       probe.expectMessageType[ShoppingCart.Accepted]
 
       // Then checkout the shopping cart
-      shoppingCart ! ShoppingCart.Checkout(Instant.now(), probe.ref)
+      shoppingCart ! ShoppingCart.Checkout(probe.ref)
       probe.expectMessageType[ShoppingCart.Accepted]
 
       // Then fail when adding new items
@@ -174,11 +172,11 @@ class ShoppingCartEntitySpec
       probe.expectMessageType[ShoppingCart.Accepted]
 
       // Then checkout the shopping cart
-      shoppingCart ! ShoppingCart.Checkout(Instant.now(), probe.ref)
+      shoppingCart ! ShoppingCart.Checkout(probe.ref)
       probe.expectMessageType[ShoppingCart.Accepted]
 
       // Then fail to checkout again
-      shoppingCart ! ShoppingCart.Checkout(Instant.now(), probe.ref)
+      shoppingCart ! ShoppingCart.Checkout(probe.ref)
       probe.expectMessage(ShoppingCart.Rejected("Cannot checkout a checked-out cart"))
     }
 
@@ -187,7 +185,7 @@ class ShoppingCartEntitySpec
       val shoppingCart = spawn(ShoppingCart(PersistenceId("ShoppingCart", randomId())))
 
       // Fail to checkout empty shopping cart
-      shoppingCart ! ShoppingCart.Checkout(Instant.now(), probe.ref)
+      shoppingCart ! ShoppingCart.Checkout(probe.ref)
       probe.expectMessage(ShoppingCart.Rejected("Cannot checkout an empty shopping cart"))
     }
   }
