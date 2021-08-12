@@ -29,7 +29,7 @@ def getDockerBaseImage(): String = sys.props.get("java.version") match {
 version in ThisBuild ~= (_.replace('+', '-'))
 dynver in ThisBuild ~= (_.replace('+', '-'))
 
-lazy val `shopping-cart-scala` = (project in file("."))
+lazy val `shopping-cart-scala-backup` = (project in file("."))
   .aggregate(`shopping-cart-api`, `shopping-cart`, `inventory-api`, inventory)
 
 lazy val `shopping-cart-api` = (project in file("shopping-cart-api"))

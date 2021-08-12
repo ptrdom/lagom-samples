@@ -2,6 +2,7 @@ package com.example.inventory.impl
 
 import com.example.inventory.api.InventoryService
 import com.example.shoppingcart.api.ShoppingCartService
+import com.example.utility.AkkaProjectionKafkaClientComponents
 import com.lightbend.lagom.scaladsl.akka.discovery.AkkaDiscoveryComponents
 import com.lightbend.lagom.scaladsl.devmode.LagomDevModeComponents
 import com.lightbend.lagom.scaladsl.server._
@@ -20,6 +21,7 @@ class InventoryLoader extends LagomApplicationLoader {
 
 abstract class InventoryApplication(context: LagomApplicationContext)
     extends LagomApplication(context)
+    with AkkaProjectionKafkaClientComponents
     with AhcWSComponents {
 
   // Bind the service that this server provides
