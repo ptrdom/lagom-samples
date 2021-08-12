@@ -9,7 +9,7 @@ import akka.kafka.scaladsl.SendProducer
 import akka.projection.ProjectionBehavior
 import akka.projection.ProjectionId
 import akka.projection.slick.SlickProjection
-import com.example.utility.TopicOps.AkkaProjectionTopic
+import com.example.utility.TopicOps.AkkaProjectionTopicProducer
 import com.lightbend.lagom.internal.api.UriUtils
 import com.lightbend.lagom.scaladsl.api.Descriptor.TopicCall
 import com.lightbend.lagom.scaladsl.api.ServiceInfo
@@ -30,7 +30,7 @@ import scala.concurrent.duration.DurationInt
 import scala.reflect.ClassTag
 
 @annotation.nowarn
-class AkkaProjectionRegisterTopicProducers[P <: JdbcProfile: ClassTag](
+class AkkaProjectionRegisterTopicProducers(
     lagomServer: LagomServer,
     info: ServiceInfo,
     serviceLocator: ServiceLocator,
@@ -39,7 +39,7 @@ class AkkaProjectionRegisterTopicProducers[P <: JdbcProfile: ClassTag](
     implicit val executionContext: ExecutionContext
 ) {
 
-  private val log = LoggerFactory.getLogger(classOf[AkkaProjectionRegisterTopicProducers[P]])
+  private val log = LoggerFactory.getLogger(classOf[AkkaProjectionRegisterTopicProducers])
 
   val kafkaConfig: KafkaConfig = KafkaConfig(actorSystem.settings.config)
 
@@ -93,7 +93,7 @@ class AkkaProjectionRegisterTopicProducers[P <: JdbcProfile: ClassTag](
         val projectionId = s"topicProducer-${topicId.name}"
 
         topicProducer match {
-          case akkaProjectionTopic: AkkaProjectionTopic[Any, _] =>
+          case akkaProjectionTopic: AkkaProjectionTopicProducer[Any, _] =>
             val keySerializer   = new StringSerializer
             val valueSerializer = new KafkaSerializer(topicCall.messageSerializer.serializerForRequest)
 

@@ -20,7 +20,6 @@ class InventoryLoader extends LagomApplicationLoader {
 
 abstract class InventoryApplication(context: LagomApplicationContext)
     extends LagomApplication(context)
-    with LagomKafkaClientComponents
     with AhcWSComponents {
 
   // Bind the service that this server provides

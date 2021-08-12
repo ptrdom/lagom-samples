@@ -12,7 +12,7 @@ import com.example.shoppingcart.api.ShoppingCartReport
 import com.example.shoppingcart.api.ShoppingCartService
 import com.example.shoppingcart.api.ShoppingCartView
 import com.example.shoppingcart.impl.ShoppingCart._
-import com.example.utility.TopicOps.AkkaProjectionTopic
+import com.example.utility.TopicOps.AkkaProjectionTopicProducer
 import com.lightbend.lagom.scaladsl.api.ServiceCall
 import com.lightbend.lagom.scaladsl.api.broker.Topic
 import com.lightbend.lagom.scaladsl.api.transport.BadRequest
@@ -85,7 +85,7 @@ class ShoppingCartServiceImpl(
     }
 
   override def shoppingCartTopic: Topic[ShoppingCartView] =
-    AkkaProjectionTopic.create[ShoppingCartView, ShoppingCart.Event](
+    AkkaProjectionTopicProducer.create[ShoppingCartView, ShoppingCart.Event](
       ShoppingCart.tags
     ) { envelope =>
       val id = ShoppingCart.entityId(envelope.persistenceId)
